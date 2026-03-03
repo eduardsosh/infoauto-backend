@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS searches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    datetime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    number_plate TEXT NOT NULL,
+    make TEXT NULL,
+    model TEXT NULL,
+    power TEXT NULL,
+    mileage TEXT NULL,
+    year DATE NULL
+);

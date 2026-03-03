@@ -12,6 +12,13 @@
 	},
 	"compatibility_flags": [
 		"nodejs_compat"
+	],
+	"d1_databases": [
+		{
+		"binding": "infoauto-d1-db", // available in your Worker on env.DB
+		"database_name": "infoauto-d1-db",
+		"database_id": "a537d17a-8c8b-4524-bc32-9a354d88b33a"
+		}
 	]
 	/**
 	 * Smart Placement
