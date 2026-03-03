@@ -189,6 +189,106 @@ function getPrevInspectionData($section, $) {
   return result;
 }
 
+// --- Database functions ---
+
+async function saveSearchToDatabase(plateText, data, env) {
+  if (!env.DB || typeof env.DB.prepare !== 'function') {
+    console.error('Database not available');
+    return { success: false, error: 'Database not available' };
+  }
+
+  // helper: find a value from an object by checking for substring matches (case‑insensitive)
+  function findValue(obj, keywords) {
+    for (const key of Object.keys(obj)) {
+      for (const kw of keywords) {
+        if (key.toLowerCase().includes(kw.toLowerCase())) {
+          return obj[key];
+        }
+      }
+    }
+    return null;
+  }
+
+  try {
+    // log raw scraped data for debugging
+    console.log('saveSearchToDatabase - incoming data for', plateText, JSON.stringify(data));
+
+    // Extract relevant fields from scraped data.  We try a couple of common key names
+    const techData = data.Tehniskie_dati || {};
+    let make = techData['Marka'] || techData['Zīmols'] || null;
+    let model = techData['Modelis'] || null;
+    let power = techData['Jauda'] || techData['Cilindru tilpums'] || null;
+
+    // If any of the above ended up null, search generically
+    if (!make) make = findValue(techData, ['marka', 'zīmol']);
+    if (!model) model = findValue(techData, ['model']);
+    if (!power) power = findValue(techData, ['jauda', 'power', 'kw']);
+
+    // log extraction results and keys
+    console.log('techData keys', Object.keys(techData));
+    console.log('extracted make/model/power', { make, model, power });
+
+    // Extract year from year data if available; primary value or first-registration date
+    let year = null;
+    if (techData['Izlaiduma gads']) {
+      year = techData['Izlaiduma gads'];
+    } else if (techData['Pirmās reģistrācijas datums']) {
+      // often a full date string; just take the year portion
+      const dt = techData['Pirmās reģistrācijas datums'];
+      const match = dt.match(/(\d{4})/);
+      if (match) year = match[1];
+      else year = dt;
+    }
+
+    // Extract mileage: first try odometer reading in techData, otherwise fall back to history
+    let mileage = null;
+    if (techData['Odometra rādījums']) {
+      mileage = techData['Odometra rādījums'];
+    }
+    if (!mileage) {
+      const mileageData = data.Nobraukuma_vēsture_LV || {};
+      console.log('mileageData keys', Object.keys(mileageData));
+      const mileageKeys = Object.keys(mileageData).filter(k => k !== '_debug');
+      if (mileageKeys.length > 0) {
+        // Get the last entry (highest index)
+        const lastKey = mileageKeys.reduce((max, key) => {
+          const num = parseInt(key);
+          return isNaN(num) ? max : Math.max(max, num);
+        }, -1);
+        if (lastKey >= 0) {
+          const lastEntry = mileageData[lastKey];
+          if (lastEntry && lastEntry.Nobraukums) {
+            mileage = lastEntry.Nobraukums;
+          } else {
+            // fallback: look for any value containing "nobrauk"
+            mileage = findValue(lastEntry || {}, ['nobrauk']);
+          }
+        }
+      }
+    }
+
+    console.log('extracted year/mileage', { year, mileage });
+
+    // Insert into database
+    const stmt = env.DB.prepare(
+      'INSERT INTO searches (number_plate, make, model, power, mileage, year) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    
+    // execute the statement and wait for the promise to resolve
+    const executionResult = await stmt
+      .bind(plateText.trim(), make, model, power, mileage, year)
+      .run();
+
+    // .run() returns an object with `meta` when successful
+    // store the id for debugging or return value
+    const lastId = executionResult?.meta?.last_row_id ?? null;
+    return { success: true, id: lastId };
+  } catch (error) {
+    console.error('Database save error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // --- Main logic ---
 
 async function getCarData(plateText, env) {
@@ -308,6 +408,12 @@ export default {
     if (url.pathname === "/car") {
       const rn = url.searchParams.get("rn") || "";
       const data = await getCarData(rn, env);
+      
+      // Save to database if successful
+      if (!data.error && rn && rn.trim()) {
+        await saveSearchToDatabase(rn, data, env);
+      }
+      
       return Response.json(data, {
         status: data.error ? 400 : 200,
         headers: corsHeaders,
